@@ -1,0 +1,2 @@
+# Bundled UI includes intentional whitespace inside generated string literals.
+frontend/dist/** linguist-generated=true -whitespace

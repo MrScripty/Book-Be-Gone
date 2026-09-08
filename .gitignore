@@ -1,0 +1,43 @@
+# Captured books, OCR output, and local configuration
+/data/
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Frontend dependencies, caches, and test output
+node_modules/
+.vite/
+.svelte-kit/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# Logs and temporary files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Local editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Keep frontend/dist/ and package-lock.json: Python serves the bundled UI.
