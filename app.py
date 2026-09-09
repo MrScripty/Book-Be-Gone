@@ -14,6 +14,8 @@ import threading
 import uuid
 import time
 import codex_stream
+import local_ocr
+import openrouter_ocr
 from markdown_it import MarkdownIt
 import transcriptions
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +32,7 @@ STATUS = {"running": False, "book": None, "page": None, "error": None,
 OCR_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_TIMEOUT", os.environ.get("PAGESCRIBE_OCR_TIMEOUT", "900")))
 OCR_PROGRESS_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_PROGRESS_TIMEOUT", "120"))
 OCR_ATTEMPTS = 2
-API_VERSION = 7
+API_VERSION = 9
 PROMPT = (ROOT / "prompts" / "ocr.md").read_text(encoding="utf-8")
 RENDERER = MarkdownIt("js-default")
 
@@ -208,6 +210,7 @@ def status_snapshot():
     with LOCK:
         snapshot = dict(STATUS)
         snapshot['api_version'] = API_VERSION
+        snapshot['openrouter_key_configured'] = bool(os.environ.get('OPENROUTER_API_KEY'))
         snapshot['elapsed'] = int(time.monotonic() - STATUS['capture_started']) if STATUS['capture_started'] and STATUS['running'] else 0
         snapshot['live_pages'] = [dict(p, html=render_markdown(p['markdown'], STATUS['book'])) for p in STATUS['live_pages']]
         return snapshot
@@ -259,14 +262,28 @@ def save_correction(book, body):
         transcriptions.save(photo, {'pages': [item]})
 
 
-def transcribe(book, selected=None, model=None, effort='low'):
+def ocr_settings(body):
+    provider = body.get('provider', 'codex')
+    if provider == 'codex':
+        model = validate_model(body.get('model', MODEL))
+        return provider, model, validate_effort(model, body.get('effort', 'low')), None
+    if provider == 'openrouter':
+        return provider, validate_model(body.get('model')), None, None
+    server_url = local_ocr.validate_url(provider, body.get('server_url', local_ocr.DEFAULT_URLS.get(provider)))
+    return provider, local_ocr.validate_model(body.get('model')), None, server_url
+
+
+def transcribe(book, selected=None, model=None, effort='low', provider='codex', server_url=None, openrouter_key=None):
     try:
-        model = validate_model(MODEL if model is None else model)
-        effort = validate_effort(model, effort)
+        provider, model, effort, server_url = ocr_settings({
+            'provider': provider, 'model': MODEL if model is None and provider == 'codex' else model,
+            'effort': effort, 'server_url': server_url})
+        if provider == 'openrouter':
+            openrouter_key = openrouter_ocr.api_key(openrouter_key)
         with LOCK:
             transcriptions.reindex(book_path(book))
             entries = pages(book)
-            STATUS.update(running=True, book=book, model=model, effort=effort, error=None, page=None, phase='Starting',
+            STATUS.update(running=True, book=book, provider=provider, model=model, effort=effort, error=None, page=None, phase='Starting',
                           live_pages=[], last_saved=None, processed=0, attempt=0,
                           completed=sum(p['done'] for p in entries), total=len(entries),
                           remaining=sum(not p['done'] for p in entries), capture_started=None)
@@ -291,14 +308,23 @@ def transcribe(book, selected=None, model=None, effort='low'):
 
             for attempt in range(1, OCR_ATTEMPTS + 1):
                 with LOCK:
-                    STATUS.update(page=photo.stem, attempt=attempt, phase='Connecting to Codex',
+                    STATUS.update(page=photo.stem, attempt=attempt, phase='Connecting to OCR provider',
                                   capture_started=time.monotonic(), live_pages=[])
                     STATUS['revision'] += 1
                 try:
-                    with tempfile.TemporaryDirectory(prefix='book-be-gone-') as work:
-                        result = codex_stream.run(ocr_photo(photo), model, prompt, schema,
-                                                  work, update, timeout=OCR_TIMEOUT, effort=effort,
-                                                  progress_timeout=OCR_PROGRESS_TIMEOUT)
+                    if provider == 'codex':
+                        with tempfile.TemporaryDirectory(prefix='book-be-gone-') as work:
+                            result = codex_stream.run(ocr_photo(photo), model, prompt, schema,
+                                                      work, update, timeout=OCR_TIMEOUT, effort=effort,
+                                                      progress_timeout=OCR_PROGRESS_TIMEOUT)
+                    elif provider == 'openrouter':
+                        result = openrouter_ocr.run(ocr_photo(photo), model, prompt, schema,
+                                                    openrouter_key, update, timeout=OCR_TIMEOUT,
+                                                    progress_timeout=OCR_PROGRESS_TIMEOUT)
+                    else:
+                        result = local_ocr.run(ocr_photo(photo), model, prompt, schema,
+                                               server_url, provider, update, timeout=OCR_TIMEOUT,
+                                               progress_timeout=OCR_PROGRESS_TIMEOUT)
                     # Incomplete streamed text never becomes a completed checkpoint.
                     result = transcriptions.validate(result)
                     result = figures.prepare(photo, ocr_photo(photo), result)
@@ -325,7 +351,8 @@ def transcribe(book, selected=None, model=None, effort='low'):
             STATUS['phase'] = 'Finished'
     except FileNotFoundError:
         with LOCK:
-            STATUS.update(error='Codex or a required input file was not found. Check your Codex installation and capture files.', phase='Stopped')
+            detail = 'Codex or a required input file was not found. Check your Codex installation and capture files.' if provider == 'codex' else 'A required OCR input file was not found. Check your capture files.'
+            STATUS.update(error=detail, phase='Stopped')
     except Exception as exc:
         with LOCK:
             # Never include the whole command/prompt in a timeout error.
@@ -415,6 +442,10 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(body, dict):
                 raise ValueError("Expected object")
             route = urlsplit(self.path).path
+            if route == '/api/local-models':
+                return self.reply(local_ocr.models(body.get('provider'), body.get('server_url')))
+            if route == '/api/openrouter-models':
+                return self.reply(openrouter_ocr.models(openrouter_ocr.api_key(body.get('api_key'))))
             with LOCK:
                 if route == "/api/books":
                     title = body.get("title", "")
@@ -473,13 +504,13 @@ class Handler(BaseHTTPRequestHandler):
                     selected = body.get("page")
                     if selected is not None:
                         page_path(book, selected)
-                    model = validate_model(body.get("model", MODEL))
-                    effort = validate_effort(model, body.get("effort", "low"))
-                    STATUS.update(running=True, book=book, page=None, error=None, model=model, effort=effort)
-                    threading.Thread(target=transcribe, args=(book, selected, model, effort), daemon=True).start()
+                    provider, model, effort, server_url = ocr_settings(body)
+                    key = openrouter_ocr.api_key(body.get('api_key')) if provider == 'openrouter' else None
+                    STATUS.update(running=True, book=book, page=None, error=None, provider=provider, model=model, effort=effort)
+                    threading.Thread(target=transcribe, args=(book, selected, model, effort, provider, server_url, key), daemon=True).start()
                     return self.reply({"ok": True})
             self.reply({"error": "Not found"}, status=404)
-        except (ValueError, OSError, TypeError) as exc:
+        except (ValueError, OSError, TypeError, codex_stream.CodexError) as exc:
             self.reply({"error": str(exc)}, status=400)
 
 

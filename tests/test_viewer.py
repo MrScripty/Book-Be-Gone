@@ -60,7 +60,7 @@ class ViewerTests(unittest.TestCase):
 
     def test_status_advertises_streaming_contract(self):
         snapshot = app.status_snapshot()
-        self.assertEqual(snapshot['api_version'], 7)
+        self.assertEqual(snapshot['api_version'], 9)
         self.assertIn('live_pages', snapshot)
 
     def test_selected_model_reaches_ocr_and_preserves_completed_capture(self):

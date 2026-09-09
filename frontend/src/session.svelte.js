@@ -1,4 +1,4 @@
-export const API_VERSION = 7;
+export const API_VERSION = 9;
 export async function api(url, body) {
   const response = await fetch(url, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const result = await response.json();
@@ -15,13 +15,17 @@ export class Session {
   books=$state([]); book=$state(''); rows=$state.raw([]); captures=$state.raw([]); active=$state('');
   status=$state.raw({running:false,live_pages:[]}); follow=$state(true); mode=$state('read');
   models=$state([]); model=$state(''); custom=$state(''); effort=$state('low');
+  provider=$state('codex'); localModels=$state([]); connectionMessage=$state('');
+  openrouterModel=$state(''); openrouterKey=$state(''); openrouterModels=$state([]);
+  localProfiles=$state({ollama:{url:'http://127.0.0.1:11434',model:''},llamacpp:{url:'http://127.0.0.1:8080',model:''}});
   edit=$state(null); crop=$state(null); imageVersion=$state(0); scrollRequest=$state(null); issueRequest=$state(null);
   checkpoint=''; polling=false; timer=null; disposed=false;
   get running(){return this.status.running;}
   get remaining(){return this.captures.filter(p=>!p.done).length;}
   get dirty(){return Boolean(this.edit && (this.edit.text!==this.edit.original || this.edit.number!==this.edit.oldNumber || this.edit.chapter!==this.edit.oldChapter));}
   get selected(){return this.viewRows.find(r=>r.key===this.active);}
-  get modelId(){return this.model==='custom'?this.custom.trim():this.model;}
+  get localConfig(){return this.localProfiles[this.provider];}
+  get modelId(){return this.provider==='openrouter'?this.openrouterModel.trim():this.provider==='codex'?(this.model==='custom'?this.custom.trim():this.model):this.localConfig.model.trim();}
   get efforts(){return this.models.find(m=>m.id===this.model)?.efforts || ['low','medium','high','xhigh','max','ultra'];}
   get viewRows(){
     let rows=this.rows;
@@ -39,6 +43,25 @@ export class Session {
   discard(){if(this.crop){this.message='Save or cancel the crop first.';return false;}return !this.dirty||confirm('Discard unsaved Markdown corrections?');}
   setModel(){localStorage.setItem('book-be-gone-model',this.modelId);if(!this.efforts.includes(this.effort))this.effort=this.efforts.includes('low')?'low':this.efforts[0];}
   setEffort(){localStorage.setItem('book-be-gone-effort',this.effort);}
+  setProvider(){localStorage.setItem('book-be-gone-provider',this.provider);this.localModels=[];this.connectionMessage='';}
+  saveOpenRouterModel(){localStorage.setItem('book-be-gone-openrouter-model',this.openrouterModel.trim());}
+  async loadOpenRouterModels(){
+    this.connectionMessage='';this.openrouterModels=[];
+    const result=await api('/api/openrouter-models',{api_key:this.openrouterKey});
+    if(this.provider!=='openrouter')return;
+    this.openrouterModels=result.models;
+    this.connectionMessage=result.models.length?`${result.models.length} vision models with structured output available`:'No compatible vision models found';
+  }
+  saveLocalSettings(clearModels=false){localStorage.setItem('book-be-gone-local-profiles',JSON.stringify(this.localProfiles));if(clearModels){this.localModels=[];this.connectionMessage='';}}
+  async loadLocalModels(){
+    const provider=this.provider,url=this.localConfig.url.trim();
+    this.connectionMessage='';this.localModels=[];
+    const result=await api('/api/local-models',{provider,server_url:url});
+    if(this.provider!==provider||this.localConfig.url.trim()!==url)return;
+    this.localModels=result.models;
+    if(!this.localConfig.model&&result.models.length){this.localConfig.model=result.models[0].id;this.saveLocalSettings();}
+    this.connectionMessage=result.models.length?`Connected · ${result.models.length} models available`:'Connected · no models loaded';
+  }
   async initialize(){
     try{
       const status=await api('/api/status');
@@ -49,6 +72,9 @@ export class Session {
       const model=localStorage.getItem('book-be-gone-model')||catalog.default;
       this.model=this.models.some(m=>m.id===model)?model:'custom';this.custom=this.model==='custom'?model:'';
       const effort=localStorage.getItem('book-be-gone-effort')||'low';this.effort=this.efforts.includes(effort)?effort:this.efforts[0];
+      const provider=localStorage.getItem('book-be-gone-provider');if(['ollama','llamacpp','openrouter'].includes(provider))this.provider=provider;
+      this.openrouterModel=localStorage.getItem('book-be-gone-openrouter-model')||'';
+      try{const profiles=JSON.parse(localStorage.getItem('book-be-gone-local-profiles')||'{}');for(const key of ['ollama','llamacpp'])for(const field of ['url','model'])if(typeof profiles?.[key]?.[field]==='string')this.localProfiles[key][field]=profiles[key][field];}catch{}
       const saved=parseHash(location.hash)?.book||localStorage.getItem('book-be-gone-book');
       this.book=books.find(b=>b.id===saved)?.id||books[0]?.id||'';
       await this.loadDocument();this.ready=true;
@@ -106,7 +132,10 @@ export class Session {
     if(!this.book||!this.modelId)throw Error('Choose a book and OCR model.');
     if(this.dirty||this.crop)throw Error('Save or cancel your edits first.');
     if(single&&this.selected?.has_text&&!confirm('Replace the text for this entire capture with new OCR?'))return;
-    const body={book:this.book,model:this.modelId,effort:this.effort};
+    const body={book:this.book,model:this.modelId,provider:this.provider};
+    if(this.provider==='codex')body.effort=this.effort;
+    else if(this.provider==='openrouter'){body.api_key=this.openrouterKey;this.saveOpenRouterModel();}
+    else{body.server_url=this.localConfig.url.trim();this.saveLocalSettings();}
     if(single){if(!this.selected)return;body.page=this.selected.capture;}
     await api('/api/ocr',body);this.edit=null;this.follow=true;this.mode='read';await this.poll();
   }
