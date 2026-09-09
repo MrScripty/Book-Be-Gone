@@ -18,6 +18,20 @@ class CodexError(RuntimeError):
         self.retryable = retryable
 
 
+class OCRContentFilterError(CodexError):
+    def __init__(self):
+        super().__init__('The model provider stopped this transcription with its content filter. '
+                         'OCR cannot complete this response; automatic retries have been stopped.')
+
+
+def check_content_filter(error):
+    # Codex can wrap a filtered response as a retryable stream disconnection.
+    # The actual reason is in additionalDetails, not the "Reconnecting" message.
+    detail = json.dumps(error).lower()
+    if 'content_filter' in detail or 'contentfilter' in detail:
+        raise OCRContentFilterError()
+
+
 def partial_pages(text):
     """Decode complete or still-streaming JSON strings for display only.
 
@@ -59,7 +73,8 @@ def partial_pages(text):
             for p in value['pages'] if isinstance(p, dict)][:2]
 
 
-def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low'):
+def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low', progress_timeout=120,
+        on_event=None):
     """Return final structured JSON; on_update receives only assistant output.
 
     Reasoning events are used as activity signals, never exposed as OCR text.
@@ -87,6 +102,25 @@ def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low')
     thread_id = None
     output = {}
     finished = None
+    preview_item = None
+    completed_items = set()
+    completed_drafts = {}
+    last_progress = None
+    longest_pages = [0, 0]
+    preview_lengths = []
+
+    def track_progress(raw):
+        nonlocal last_progress
+        now = time.monotonic()
+        if last_progress is None:
+            last_progress = now
+        pages = partial_pages(raw)
+        for index, page in enumerate(pages or []):
+            size = len(page['markdown'])
+            if size > longest_pages[index]:
+                longest_pages[index] = size
+                last_progress = now
+        return pages
 
     def send(value):
         try:
@@ -100,16 +134,24 @@ def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low')
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise OCRTimeout(f'Codex exceeded the {timeout:g}-second limit for this capture.')
+            if last_progress is not None:
+                progress_remaining = progress_timeout - (time.monotonic() - last_progress)
+                if progress_remaining <= 0:
+                    raise CodexError(f'Codex made no new transcription progress for {progress_timeout:g} seconds. '
+                                     'Stopped this capture; try another OCR model.')
+                remaining = min(remaining, progress_remaining)
             try:
                 message = messages.get(timeout=min(remaining, .25))
             except queue.Empty:
                 continue
             if message is None:
                 raise CodexError('Codex exited before finishing the capture. Check your Codex login if this repeats.', retryable=True)
+            if on_event is not None:
+                on_event(message)
             return message
 
     def notify(message):
-        nonlocal finished
+        nonlocal finished, preview_item, preview_lengths
         method = message.get('method', '')
         params = message.get('params') or {}
         if 'id' in message and method:
@@ -120,16 +162,47 @@ def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low')
             return
         if method == 'item/agentMessage/delta':
             item_id = params['itemId']
+            new_item = item_id not in output
             output[item_id] = output.get(item_id, '') + params['delta']
-            on_update('Transcribing', output[item_id])
+            pages = track_progress(output[item_id])
+            lengths = [len(p['markdown']) for p in pages or []]
+            # A turn can emit a replacement message. Its opening JSON must not
+            # erase the previous preview. Resume streaming when every visible
+            # page has caught up; a completed item may legitimately be shorter.
+            caught_up = (len(lengths) >= len(preview_lengths)
+                         and all(size >= old for size, old in zip(lengths, preview_lengths)))
+            if preview_item in (None, item_id) or caught_up:
+                on_update('Transcribing', output[item_id])
+                if pages and any(p['markdown'] for p in pages):
+                    preview_item = item_id
+                    preview_lengths = lengths
+            elif new_item:
+                on_update('Updating transcription', None)
         elif method == 'item/completed' and params.get('item', {}).get('type') == 'agentMessage':
             item = params['item']
             output[item['id']] = item.get('text', '')
-            on_update('Transcribing', output[item['id']])
+            if item['id'] in completed_items:
+                return
+            completed_items.add(item['id'])
+            try:
+                value = json.loads(output[item['id']])
+            except ValueError:
+                value = None
+            pages = track_progress(output[item['id']])
+            if isinstance(value, dict) and pages and any(p['markdown'] for p in pages):
+                fingerprint = json.dumps(value, sort_keys=True, ensure_ascii=False)
+                completed_drafts[fingerprint] = completed_drafts.get(fingerprint, 0) + 1
+                if completed_drafts[fingerprint] >= 3:
+                    raise CodexError('Codex repeated the same transcription three times without finishing. '
+                                     'Stopped this capture; try another OCR model.')
+                preview_item = item['id']
+                preview_lengths = [len(p['markdown']) for p in pages]
+                on_update('Waiting for OCR to finish', output[item['id']])
         elif method == 'turn/completed':
             finished = params['turn']
         elif method == 'error':
             error = params.get('error') or {}
+            check_content_filter(error)
             if params.get('willRetry'):
                 on_update('Codex is reconnecting', None)
             else:
@@ -147,6 +220,7 @@ def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low')
             message = receive()
             if message.get('id') == request_id and 'method' not in message:
                 if message.get('error'):
+                    check_content_filter(message['error'])
                     raise CodexError(str(message['error'].get('message', 'Codex request failed.'))[:400])
                 return message.get('result', {})
             notify(message)
@@ -169,6 +243,7 @@ def run(image, model, prompt, schema, cwd, on_update, timeout=900, effort='low')
         while finished is None:
             notify(receive())
         if finished.get('status') != 'completed':
+            check_content_filter(finished.get('error'))
             message = (finished.get('error') or {}).get('message') or 'Codex stopped before completing the capture.'
             raise CodexError(str(message)[:400], retryable=finished.get('status') == 'interrupted')
         # Final items are authoritative; some versions omit them from this notification.

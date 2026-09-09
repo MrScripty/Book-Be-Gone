@@ -28,6 +28,7 @@ STATUS = {"running": False, "book": None, "page": None, "error": None,
           "remaining": 0, "total": 0, "processed": 0, "attempt": 0,
           "capture_started": None, "revision": 0}
 OCR_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_TIMEOUT", os.environ.get("PAGESCRIBE_OCR_TIMEOUT", "900")))
+OCR_PROGRESS_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_PROGRESS_TIMEOUT", "120"))
 OCR_ATTEMPTS = 2
 API_VERSION = 7
 PROMPT = (ROOT / "prompts" / "ocr.md").read_text(encoding="utf-8")
@@ -296,7 +297,8 @@ def transcribe(book, selected=None, model=None, effort='low'):
                 try:
                     with tempfile.TemporaryDirectory(prefix='book-be-gone-') as work:
                         result = codex_stream.run(ocr_photo(photo), model, prompt, schema,
-                                                  work, update, timeout=OCR_TIMEOUT, effort=effort)
+                                                  work, update, timeout=OCR_TIMEOUT, effort=effort,
+                                                  progress_timeout=OCR_PROGRESS_TIMEOUT)
                     # Incomplete streamed text never becomes a completed checkpoint.
                     result = transcriptions.validate(result)
                     result = figures.prepare(photo, ocr_photo(photo), result)
@@ -328,7 +330,8 @@ def transcribe(book, selected=None, model=None, effort='low'):
         with LOCK:
             # Never include the whole command/prompt in a timeout error.
             detail = str(exc)[:500] if not isinstance(exc, TimeoutError) else f'This capture did not finish within {OCR_TIMEOUT:g} seconds after {OCR_ATTEMPTS} attempts.'
-            STATUS.update(error=f"Capture {STATUS['page'] or 'unknown'}: {detail} Completed captures are saved. Choose OCR remaining captures to resume.", phase='Stopped')
+            resume = '' if isinstance(exc, codex_stream.OCRContentFilterError) else ' Choose OCR remaining captures to resume.'
+            STATUS.update(error=f"Capture {STATUS['page'] or 'unknown'}: {detail} Completed captures are saved.{resume}", phase='Stopped')
     finally:
         with LOCK:
             STATUS['running'] = False

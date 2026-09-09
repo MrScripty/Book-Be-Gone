@@ -40,6 +40,10 @@ Restart the Python server after updating the application, then reload the browse
 
 Each capture now has a **900-second (15-minute) limit**, with one automatic retry after a timeout or transient connection failure. Set `BOOK_BE_GONE_OCR_TIMEOUT` (seconds) before starting the server to change the limit. A repeat failure stops with a concise message; completed captures stay saved, and the remaining button resumes from the unfinished capture. The Codex child process group is terminated on timeout so a retry cannot leave the previous worker running.
 
+Once output starts, OCR also stops after **120 seconds without new transcription progress**, without automatically retrying. Set `BOOK_BE_GONE_OCR_PROGRESS_TIMEOUT` (seconds) to adjust this limit. Progress means a printed page's transcript exceeds its greatest length so far in this attempt; reasoning events and restarted drafts alone do not reset this timer. Replacement drafts keep the previous preview visible until they catch up or finish. A complete message shows “Waiting for OCR to finish” until the turn ends; if it never ends, the progress limit still applies. Saved text is preserved when a stalled redo stops.
+
+If the provider reports `content_filter`, OCR stops immediately and displays that reason, even if Codex labels the error as a retryable stream disconnection. Retrying that filtered response automatically does not complete the transcription. Partial streamed text is never saved as completed OCR, and an existing transcription is preserved.
+
 The integration uses the installed CLI's [app-server streaming protocol](https://learn.chatgpt.com/docs/app-server), with an ephemeral read-only thread per capture, the selected model and thinking level, structured page output, and only the previous chapter as context. It displays assistant transcription deltas, not reasoning text.
 
 ### OCR transcription rules
