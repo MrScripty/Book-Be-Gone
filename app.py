@@ -18,7 +18,9 @@ import local_ocr
 import openrouter_ocr
 from markdown_it import MarkdownIt
 import transcriptions
+import ocr_review
 import ocr_labels
+import review_render
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -33,7 +35,7 @@ STATUS = {"running": False, "book": None, "page": None, "error": None,
 OCR_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_TIMEOUT", os.environ.get("PAGESCRIBE_OCR_TIMEOUT", "900")))
 OCR_PROGRESS_TIMEOUT = float(os.environ.get("BOOK_BE_GONE_OCR_PROGRESS_TIMEOUT", "120"))
 OCR_ATTEMPTS = 2
-API_VERSION = 9
+API_VERSION = 14
 PROMPT = (ROOT / "prompts" / "ocr.md").read_text(encoding="utf-8")
 RENDERER = MarkdownIt("js-default")
 
@@ -229,6 +231,7 @@ def document(book):
             printed.append(dict(item, key=f"{capture['id']}:{index}", capture=capture['id'],
                                 index=index, done=capture['done'], has_text=record is not None,
                                 corrected=ocr_photo(photo) != photo, revision=revision,
+                                review_pending=ocr_review.path(photo).exists(),
                                 html=render_markdown(item['markdown'], book)))
     return {'captures': captures, 'pages': printed}
 
@@ -293,6 +296,8 @@ def transcribe(book, selected=None, model=None, effort='low', provider='codex', 
             book_path(book) / (p['id'] + '.jpg') for p in entries if not p['done']]
         schema = json.loads((ROOT / 'prompts' / 'ocr.schema.json').read_text())
         for photo in targets:
+            if ocr_review.path(photo).exists():
+                raise ValueError('Review or discard the pending OCR comparison before transcribing this capture again.')
             # Recheck the checkpoint before launching any model work.
             if selected is None and transcriptions.read(photo) is not None and not photo.with_suffix('.stale').exists():
                 continue
@@ -339,9 +344,14 @@ def transcribe(book, selected=None, model=None, effort='low', provider='codex', 
                     update('Retrying this capture; completed captures are preserved', None)
             with LOCK:
                 STATUS['phase'] = 'Saving Markdown'
-                transcriptions.save(photo, result)
-                transcriptions.reindex(book_path(book), link_pages=True)
-                record = transcriptions.read(photo)
+                if transcriptions.read(photo) is not None:
+                    transcriptions.reindex(book_path(book), link_pages=True)
+                    ocr_review.propose(photo, result)
+                    record = transcriptions.read(photo)
+                else:
+                    transcriptions.save(photo, result)
+                    transcriptions.reindex(book_path(book), link_pages=True)
+                    record = transcriptions.read(photo)
                 STATUS['live_pages'] = [{'page_number': p['page_number'], 'markdown': p['markdown']} for p in record['pages']]
                 STATUS['last_saved'] = {'capture': photo.stem, 'page_numbers': [p['page_number'] for p in record['pages']]}
                 entries = pages(book)
@@ -402,6 +412,9 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply(pages(parts[2]))
                 if len(parts) == 3 and parts[:2] == ["api", "document"]:
                     return self.reply(document(parts[2]))
+                if len(parts) == 4 and parts[:2] == ['api', 'ocr-review']:
+                    proposal = ocr_review.read(page_path(parts[2], parts[3]))
+                    return self.reply(review_render.render(proposal, lambda text: render_markdown(text, parts[2])) if proposal else None)
                 if len(parts) == 4 and parts[:2] in (["api", "asset"], ["api", "figure-source"]):
                     folder = book_path(parts[2])
                     name = parts[3]
@@ -469,6 +482,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self.reply({"html": render_markdown(text, render_book)})
                 book = body.get("book")
                 path = book_path(book)
+                if route == '/api/ocr-review':
+                    if STATUS['running']:
+                        raise ValueError('Wait for OCR to finish before resolving a comparison.')
+                    ocr_review.resolve(page_path(book, body.get('page')), body.get('id'),
+                                       body.get('selected'), discard=body.get('discard') is True)
+                    STATUS['revision'] += 1
+                    return self.reply({'ok': True})
                 if route == "/api/adjust":
                     if "image" not in body and body.get("reset") is not True:
                         raise ValueError("Expected adjusted image or reset")

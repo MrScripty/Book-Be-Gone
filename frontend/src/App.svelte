@@ -6,6 +6,7 @@
   import Capture from './Capture.svelte';
   import CropEditor from './CropEditor.svelte';
   import OCRSettings from './OCRSettings.svelte';
+  import OCRReview from './OCRReview.svelte';
   const session=new Session();
   let title=$state(''),creating=$state(false),jump=$state('');
   let index=$derived(session.viewRows.findIndex(r=>r.key===session.active));
@@ -47,4 +48,5 @@
   </footer>
 </div>
 {#if session.crop}{#key session.crop}<CropEditor {session}/>{/key}{/if}
+{#if session.review}<OCRReview {session}/>{/if}
 {/if}

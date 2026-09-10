@@ -33,13 +33,14 @@
 </script>
 <section class="transcript-pane">
   <div class="panelbar"><span class="eyebrow">{editing?'EDIT MARKDOWN':'TRANSCRIPT'}</span><span class="grow"></span>
+    {#if current?.review_pending}<button disabled={session.running||session.pending} onclick={()=>session.run(()=>session.openReview())}>Review OCR changes</button>{/if}
     {#if session.edit}<button disabled={session.pending} onclick={()=>session.edit.reading?session.startEdit():session.run(()=>session.previewEdit())}>{session.edit.reading?'Edit':'Preview'}</button><button disabled={session.pending} onclick={()=>session.cancelEdit()}>Cancel</button><button class="primary" disabled={!session.dirty||session.pending||session.busyCapture(session.edit.capture)} onclick={()=>session.run(()=>session.saveEdit())}>Save</button>
-    {:else}<button disabled={!current?.has_text||current?.live||session.pending||session.busyCapture(current?.capture)} onclick={()=>session.startEdit()}>Edit Markdown</button>{/if}
+    {:else}<button disabled={!current?.has_text||current?.live||session.pending||session.busyCapture(current?.capture)} onclick={()=>{session.startEdit();tick().then(()=>document.querySelector('[aria-label="Printed page number"]')?.focus());}}>Edit page name</button><button disabled={!current?.has_text||current?.live||session.pending||session.busyCapture(current?.capture)} onclick={()=>session.startEdit()}>Edit Markdown</button>{/if}
   </div>
   {#if session.issues.length}<div class="issuebar"><span>{session.issues.length} unclear {session.issues.length===1?'passage':'passages'}</span><span class="grow"></span><button aria-label="Previous unclear passage" onclick={()=>issue(-1)}>↑</button><button aria-label="Next unclear passage" onclick={()=>issue(1)}>Next unclear ↓</button></div>{/if}
   {#if editing}
     <div class="markdown-editor"><textarea bind:this={textarea} aria-label="Edit page Markdown" spellcheck="false" bind:value={session.edit.text} readonly={session.busyCapture(session.edit.capture)} oninput={()=>session.edit.preview=null}></textarea>
-      <details class="metadata"><summary>Page & chapter</summary><div><label>Printed page<input aria-label="Printed page number" maxlength="200" bind:value={session.edit.number}/></label><label>Chapter<input aria-label="Chapter" maxlength="200" bind:value={session.edit.chapter}/></label></div></details>
+      <details class="metadata" open><summary>Page name & chapter</summary><div><label>Printed page<input aria-label="Printed page number" maxlength="200" bind:value={session.edit.number}/></label><label>Chapter<input aria-label="Chapter" maxlength="200" bind:value={session.edit.chapter}/></label></div><p class="small muted">The filename is generated from these fields when you save. Chapter changes carry forward until the next chapter heading. Saved transcript text is preserved.</p>{#if current?.filename}<p class="small muted" style="overflow-wrap:anywhere">Current file: {current.filename}</p>{/if}</details>
     </div>
   {/if}
   <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (Focusable reading region delegates links and correction controls.) -->

@@ -1,4 +1,4 @@
-export const API_VERSION = 9;
+export const API_VERSION = 14;
 export async function api(url, body) {
   const response = await fetch(url, body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const result = await response.json();
@@ -19,6 +19,7 @@ export class Session {
   openrouterModel=$state(''); openrouterKey=$state(''); openrouterModels=$state([]);
   localProfiles=$state({ollama:{url:'http://127.0.0.1:11434',model:''},llamacpp:{url:'http://127.0.0.1:8080',model:''}});
   edit=$state(null); crop=$state(null); imageVersion=$state(0); scrollRequest=$state(null); issueRequest=$state(null);
+  review=$state(null);
   checkpoint=''; polling=false; timer=null; disposed=false;
   get running(){return this.status.running;}
   get remaining(){return this.captures.filter(p=>!p.done).length;}
@@ -123,6 +124,7 @@ export class Session {
   async previewEdit(){const edit=this.edit;if(!edit)return;const text=edit.text;const result=await api('/api/render',{book:this.book,text});if(this.edit===edit&&edit.text===text){edit.preview=result.html;edit.reading=true;this.scrollRequest={key:edit.key,stamp:Date.now()};}}
   async saveEdit(){
     const e=this.edit;if(!e)return;
+    if(e.number.trim()&&!/^[A-Za-z0-9]+$/.test(e.number.trim()))throw Error('Printed page number must contain only letters A–Z and digits 0–9, or be blank.');
     const body={book:this.book,page:e.capture,printed_index:e.index,revision:e.revision,markdown:e.text,page_number:e.number.trim()||null};
     if(e.chapter!==e.oldChapter)body.chapter_seen=e.chapter.trim()||null;
     await api('/api/save',body);this.edit=null;await this.loadDocument();this.scrollRequest={key:this.active,stamp:Date.now()};this.message='Corrections saved.';
@@ -131,7 +133,8 @@ export class Session {
   async ocr(single=false){
     if(!this.book||!this.modelId)throw Error('Choose a book and OCR model.');
     if(this.dirty||this.crop)throw Error('Save or cancel your edits first.');
-    if(single&&this.selected?.has_text&&!confirm('Replace the text for this entire capture with new OCR?'))return;
+    if(single&&this.selected?.review_pending)throw Error('Review or discard the pending OCR comparison first.');
+    if(single&&this.selected?.has_text&&!confirm('Run OCR again and compare changes? Your saved text will remain unchanged until you accept changes.'))return;
     const body={book:this.book,model:this.modelId,provider:this.provider};
     if(this.provider==='codex')body.effort=this.effort;
     else if(this.provider==='openrouter'){body.api_key=this.openrouterKey;this.saveOpenRouterModel();}
@@ -140,6 +143,17 @@ export class Session {
     await api('/api/ocr',body);this.edit=null;this.follow=true;this.mode='read';await this.poll();
   }
   async linkPages(){if(this.dirty||this.crop||this.running)throw Error('Finish OCR and save or cancel edits first.');const result=await api('/api/link-pages',{book:this.book});this.edit=null;await this.loadDocument();this.message=`Linked references on ${result.changed_pages} pages.`;}
+  async openReview(){
+    if(this.dirty||this.crop)throw Error('Save or cancel your edits first.');
+    const book=this.book,page=this.selected.capture;
+    const value=await api(`/api/ocr-review/${book}/${page}`);
+    if(value)this.review={...value,book,page,selected:[]};
+  }
+  async resolveReview(discard=false){
+    const r=this.review;if(!r)return;
+    await api('/api/ocr-review',{book:r.book,page:r.page,id:r.id,selected:r.selected,discard});
+    this.review=null;await this.loadDocument();this.message=discard?'New OCR discarded; saved text kept.':'Selected OCR changes saved.';
+  }
   async export(){
     if(this.dirty||this.crop)throw Error('Save or cancel edits before exporting.');
     const response=await fetch('/api/export/'+this.book);if(!response.ok)throw Error((await response.json()).error);
@@ -150,7 +164,7 @@ export class Session {
     try{
       const status=await api('/api/status');if(this.disposed)return;
       if(status.api_version!==API_VERSION){this.warning='Server update needed. Restart Book-Be-Gone and reload.';this.ready=false;return;}
-      this.status=status;const checkpoint=`${status.book}:${status.completed}:${status.running}:${status.last_saved?.capture}`;
+      this.status=status;const checkpoint=`${status.book}:${status.completed}:${status.running}:${status.last_saved?.capture}:${status.running?'':status.revision}`;
       if(checkpoint!==this.checkpoint){await this.loadDocument();this.checkpoint=checkpoint;}
       if(status.book===this.book&&status.page&&status.running&&this.follow&&!this.edit&&!this.crop){const target=this.viewRows.filter(r=>r.capture===status.page).at(-1);if(target){this.select(target.key,{scroll:false,manual:false});this.scrollRequest={key:target.key,bottom:!!target.markdown,stamp:Date.now()};}}
     }finally{this.polling=false;}

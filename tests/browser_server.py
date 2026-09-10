@@ -9,6 +9,7 @@ import app
 import codex_stream
 import openrouter_ocr
 from fake_local_server import start
+import fake_local_server
 
 real_popen = subprocess.Popen
 
@@ -25,6 +26,14 @@ os.environ['OPENROUTER_API_KEY'] = ''
 
 
 class BrowserHandler(app.Handler):
+    def do_POST(self):
+        if self.path == '/test/index-ocr':
+            self.rfile.read(int(self.headers.get('Content-Length', '0')))
+            fake_local_server.RESULT['pages'][0]['markdown'] = '# Index\n\n' + '\n\n'.join(
+                f'{"Topic" if i == 0 else "Entry"} {i}: {i+1}' for i in range(120))
+            return self.reply({'ok': True})
+        super().do_POST()
+
     def do_GET(self):
         if self.path == '/test/local-url':
             return self.reply({'url': f'http://127.0.0.1:{local_server.server_port}'})
