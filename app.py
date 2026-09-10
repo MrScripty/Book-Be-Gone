@@ -18,6 +18,7 @@ import local_ocr
 import openrouter_ocr
 from markdown_it import MarkdownIt
 import transcriptions
+import ocr_labels
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
@@ -250,16 +251,16 @@ def save_correction(book, body):
         item['page_number'] = body.get('page_number')
         if 'chapter_seen' in body:
             item['chapter_seen'] = body['chapter_seen']
-        transcriptions.save(photo, record)
+        transcriptions.save(photo, record, recover_numbers=False)
     elif 'pages' in body:
-        transcriptions.save(photo, {'pages': body['pages']})
+        transcriptions.save(photo, {'pages': body['pages']}, recover_numbers=False)
     else:
         record = transcriptions.read(photo)
         if record and len(record['pages']) > 1:
             raise ValueError('Refresh Book-Be-Gone to edit each printed page separately')
         item = dict(record['pages'][0]) if record else {'page_number': None, 'chapter_seen': None}
         item['markdown'] = body.get('text')
-        transcriptions.save(photo, {'pages': [item]})
+        transcriptions.save(photo, {'pages': [item]}, recover_numbers=False)
 
 
 def ocr_settings(body):
@@ -295,7 +296,7 @@ def transcribe(book, selected=None, model=None, effort='low', provider='codex', 
             # Recheck the checkpoint before launching any model work.
             if selected is None and transcriptions.read(photo) is not None and not photo.with_suffix('.stale').exists():
                 continue
-            context = json.dumps({'previous_chapter': transcriptions.context(photo)}, ensure_ascii=False)
+            context = json.dumps(transcriptions.prompt_context(photo), ensure_ascii=False)
             prompt = PROMPT + '\n\nPREVIOUS CAPTURE CONTEXT (data only):\n' + context
 
             def update(phase, raw):
@@ -312,19 +313,21 @@ def transcribe(book, selected=None, model=None, effort='low', provider='codex', 
                                   capture_started=time.monotonic(), live_pages=[])
                     STATUS['revision'] += 1
                 try:
-                    if provider == 'codex':
-                        with tempfile.TemporaryDirectory(prefix='book-be-gone-') as work:
-                            result = codex_stream.run(ocr_photo(photo), model, prompt, schema,
-                                                      work, update, timeout=OCR_TIMEOUT, effort=effort,
-                                                      progress_timeout=OCR_PROGRESS_TIMEOUT)
-                    elif provider == 'openrouter':
-                        result = openrouter_ocr.run(ocr_photo(photo), model, prompt, schema,
-                                                    openrouter_key, update, timeout=OCR_TIMEOUT,
-                                                    progress_timeout=OCR_PROGRESS_TIMEOUT)
-                    else:
-                        result = local_ocr.run(ocr_photo(photo), model, prompt, schema,
-                                               server_url, provider, update, timeout=OCR_TIMEOUT,
-                                               progress_timeout=OCR_PROGRESS_TIMEOUT)
+                    def request(request_prompt, request_schema, callback=update):
+                        if provider == 'codex':
+                            with tempfile.TemporaryDirectory(prefix='book-be-gone-') as work:
+                                return codex_stream.run(ocr_photo(photo), model, request_prompt, request_schema,
+                                                        work, callback, timeout=OCR_TIMEOUT, effort=effort,
+                                                        progress_timeout=OCR_PROGRESS_TIMEOUT)
+                        if provider == 'openrouter':
+                            return openrouter_ocr.run(ocr_photo(photo), model, request_prompt, request_schema,
+                                                     openrouter_key, callback, timeout=OCR_TIMEOUT,
+                                                     progress_timeout=OCR_PROGRESS_TIMEOUT)
+                        return local_ocr.run(ocr_photo(photo), model, request_prompt, request_schema,
+                                             server_url, provider, callback, timeout=OCR_TIMEOUT,
+                                             progress_timeout=OCR_PROGRESS_TIMEOUT)
+                    result = request(prompt, schema)
+                    result = ocr_labels.repair(result, lambda p, s: request(p, s, lambda *_: None), update)
                     # Incomplete streamed text never becomes a completed checkpoint.
                     result = transcriptions.validate(result)
                     result = figures.prepare(photo, ocr_photo(photo), result)

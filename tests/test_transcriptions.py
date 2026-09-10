@@ -14,6 +14,53 @@ def result(*pages):
 
 
 class TranscriptionTests(unittest.TestCase):
+    def test_page_labels_allow_only_ascii_letters_and_digits(self):
+        for number in ('390', 'xiv', 'A12', ' 390 ', '', None):
+            with self.subTest(number=number):
+                page = store.validate(result((number, 'Chapter — Title', 'Text')), recover_numbers=False)['pages'][0]
+                self.assertEqual(page['page_number'], number.strip() or None if number else None)
+        for number in ('}{', '390}{', 'Page 390', '39/0', 'A-12', 'é', '１２', '12\n34'):
+            with self.subTest(number=number):
+                with self.assertRaisesRegex(ValueError, 'only letters'):
+                    store.validate(result((number, None, '390 TITLE')), recover_numbers=False)
+                self.assertIsNone(store.validate(result((number, None, 'Body text')))['pages'][0]['page_number'])
+                self.assertEqual(store.validate(result((number, None, '390 TITLE')))['pages'][0]['page_number'], '390')
+
+    def test_invalid_manual_name_does_not_change_saved_files(self):
+        store.save(self.photos[0], result(('390', 'Chapter', 'Original')))
+        before = store.read(self.photos[0])
+        with patch.object(app, 'DATA', self.root):
+            with self.assertRaisesRegex(ValueError, 'only letters'):
+                app.save_correction(self.book.name, {'page': self.photos[0].stem,
+                    'printed_index': 0, 'revision': store.revision(self.photos[0]),
+                    'page_number': '390}{', 'markdown': 'Changed'})
+        self.assertEqual(store.read(self.photos[0]), before)
+
+    def test_malformed_number_recovers_from_running_header(self):
+        value = store.validate(result(('}, {', None, '390 THE ANATOMY OF STORY\n\nBody text')))
+        self.assertEqual(value['pages'][0]['page_number'], '390')
+
+    def test_recovery_preserves_text_and_manual_name_corrections(self):
+        text = '390 THE ANATOMY OF STORY\n\nBody text\n'
+        store.save(self.photos[0], result(('}, {', 'Chapter', text)))
+        page = store.read(self.photos[0])['pages'][0]
+        self.assertTrue(page['filename'].startswith('page-0390__'))
+        old_name = page['filename']
+        store.save(self.photos[0], result(('391', 'Corrected chapter', text)))
+        page = store.read(self.photos[0])['pages'][0]
+        self.assertTrue(page['filename'].startswith('page-0391__corrected-chapter__'))
+        self.assertEqual(page['markdown'], text)
+        self.assertFalse((self.book / 'markdown' / old_name).exists())
+        self.assertEqual(len(list((self.book / '.ocr' / 'history').glob('*.json'))), 1)
+
+    def test_conflicting_boundary_numbers_are_not_guessed(self):
+        self.assertIsNone(store.validate(result(('}, {', None, '390\n\nBody\n\n391')))['pages'][0]['page_number'])
+
+    def test_number_recovery_does_not_guess_from_body_or_neighbor(self):
+        for text in ('There are 390 examples.', '3. First item\n\nBody', 'Body\n\n390 reasons to read'):
+            self.assertIsNone(store.validate(result(('}, {', None, text)))['pages'][0]['page_number'])
+        self.assertIsNone(store.validate(result((None, None, '390 TITLE')))['pages'][0]['page_number'])
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -91,7 +138,12 @@ class TranscriptionTests(unittest.TestCase):
         def fake(photo, model, prompt, schema, cwd, update, **kwargs):
             calls.append(photo.stem)
             context = json.loads(prompt.split('PREVIOUS CAPTURE CONTEXT (data only):\n')[1])
-            self.assertEqual(context, {'previous_chapter': None if len(calls) == 1 else 'Chapter 7'})
+            self.assertEqual(context['previous_chapter'], None if len(calls) == 1 else 'Chapter 7')
+            if len(calls) == 1:
+                self.assertIsNone(context['previous_page'])
+            else:
+                self.assertEqual(context['previous_page']['page_number'], str(len(calls) - 1))
+                self.assertIn('chapter-7', context['previous_page']['filename'])
             self.assertIn('pages', schema['properties'])
             return result((str(len(calls)), 'Chapter 7' if len(calls) == 1 else None, 'Sentence fragment'))
         with patch.object(app, 'DATA', self.root), patch('app.codex_stream.run', side_effect=fake):

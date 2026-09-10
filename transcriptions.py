@@ -38,7 +38,25 @@ def read(photo):
     return None
 
 
-def validate(value):
+def recover_page_number(number, markdown):
+    """Repair invalid OCR metadata; never override an alphanumeric or absent label."""
+    if not number or re.fullmatch(r'[A-Za-z0-9]+', number):
+        return number
+    lines = [line.strip() for line in markdown.splitlines() if line.strip()]
+    candidates = set()
+    for line in lines[:1] + lines[-1:]:
+        if re.fullmatch(r'[0-9]{1,6}|[ivxlcdmIVXLCDM]+', line):
+            candidates.add(line)
+        # Only an all-capitals running header, not a numbered list or prose.
+        for pattern in (r'([0-9]{1,6})\s+([A-Z][A-Z &—–:-]+)',
+                        r'([A-Z][A-Z &—–:-]+)\s+([0-9]{1,6})'):
+            match = re.fullmatch(pattern, line)
+            if match:
+                candidates.add(next(part for part in match.groups() if part.isdigit()))
+    return candidates.pop() if len(candidates) == 1 else None
+
+
+def validate(value, *, recover_numbers=True):
     if not isinstance(value, dict) or not isinstance(value.get('pages'), list) or not 1 <= len(value['pages']) <= 2:
         raise ValueError('OCR must return one or two printed pages')
     result = []
@@ -52,8 +70,16 @@ def validate(value):
         for key in ['page_number', 'chapter_seen']:
             field = page.get(key)
             if field is not None and (not isinstance(field, str) or len(field) > 200):
+                if key == 'page_number' and recover_numbers:
+                    item[key] = recover_page_number('}{', text)
+                    continue
                 raise ValueError('Invalid ' + key)
             item[key] = field.strip() or None if isinstance(field, str) else None
+        number = item['page_number']
+        if number and not re.fullmatch(r'[A-Za-z0-9]+', number):
+            if not recover_numbers:
+                raise ValueError('Printed page number must contain only letters A–Z and digits 0–9, or be blank.')
+            item['page_number'] = recover_page_number(number, text)
         if 'figures' in page:
             item['figures'] = figures.validate(page['figures'])
         result.append(item)
@@ -125,8 +151,8 @@ def reindex(book, link_pages=False):
     return {'changed_pages': changed}
 
 
-def save(photo, value):
-    value = validate(value)
+def save(photo, value, *, recover_numbers=True):
+    value = validate(value, recover_numbers=recover_numbers)
     old = read(photo)
     if old:
         atomic_json(photo.parent / '.ocr' / 'history' / f'{photo.stem}-{time.time_ns()}.json', old)
@@ -146,16 +172,25 @@ def save(photo, value):
             (photo.parent / 'markdown' / name).unlink(missing_ok=True)
 
 
-def context(photo):
+def prompt_context(photo):
+    context = {'previous_chapter': None, 'previous_page': None}
     photos = sorted(photo.parent.glob('[0-9]*.jpg'))
     position = photos.index(photo)
     if position == 0:
-        return None
+        return context
     previous = photos[position - 1]
     if int(previous.stem) + 1 != int(photo.stem) or previous.with_suffix('.stale').exists():
-        return None
+        return context
     record = read(previous)
-    return record['pages'][-1].get('chapter') if record else None
+    if record:
+        page = record['pages'][-1]
+        context['previous_chapter'] = page.get('chapter')
+        context['previous_page'] = {key: page.get(key) for key in ('page_number', 'chapter', 'filename')}
+    return context
+
+
+def context(photo):
+    return prompt_context(photo)['previous_chapter']
 
 
 def combined(photo):

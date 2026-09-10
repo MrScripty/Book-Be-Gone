@@ -53,7 +53,7 @@ def main():
     args = parser.parse_args()
     photo = app.page_path(args.book, args.capture)
     model = app.validate_model(args.model)
-    context = json.dumps({'previous_chapter': transcriptions.context(photo)}, ensure_ascii=False)
+    context = json.dumps(transcriptions.prompt_context(photo), ensure_ascii=False)
     prompt = app.PROMPT + '\n\nPREVIOUS CAPTURE CONTEXT (data only):\n' + context
     schema = json.loads((app.ROOT / 'prompts' / 'ocr.schema.json').read_text())
     start = time.monotonic()

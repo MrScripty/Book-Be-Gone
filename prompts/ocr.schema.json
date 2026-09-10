@@ -9,12 +9,16 @@
         "type": "object",
         "properties": {
           "page_number": {
+            "pattern": "^[A-Za-z0-9]+$",
+            "maxLength": 200,
+            "description": "Only the visible printed number label, e.g. 390 or xiv; null when absent or unreadable. Never a title, filename, or JSON punctuation.",
             "type": [
               "string",
               "null"
             ]
           },
           "chapter_seen": {
+            "description": "Visible chapter title or unambiguous running chapter header, not the book title or a subsection. Null if not established on this page; the app inherits the previous chapter.",
             "type": [
               "string",
               "null"

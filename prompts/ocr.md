@@ -34,6 +34,14 @@ READING ORDER AND PAGE NUMBERS
   merge text across the page boundary or add a separator inside either entry.
 - page_number is the exact visible printed page number, or null if absent or
   unreadable. Never infer it from the capture filename or a neighboring page.
+  Return only the number label as a JSON string (e.g. "390" or "xiv"), not
+  "Page 390", a title, filename, JSON punctuation, or a combined spread range.
+  Cross-check this field against the number you transcribed for this same page.
+  The page_number label must contain only ASCII letters and digits, without
+  spaces or punctuation. If the printed label cannot fit this format, return
+  null for this field and preserve the exact printed label in the Markdown.
+  For a header "390 THE ANATOMY OF STORY", page_number is "390"; the book title
+  is not chapter_seen. If uncertain, use null rather than sacrificing the transcript.
 - chapter_seen is a chapter number/title or named front/back-matter section
   established by a visible chapter opening or an unambiguous running chapter
   header on this page. Preserve the visible wording, including a chapter number
@@ -43,6 +51,10 @@ READING ORDER AND PAGE NUMBERS
   It may help distinguish running titles, but do not copy it into chapter_seen
   unless this page visibly establishes it. The app carries known chapters forward.
   When context is null, do not guess a chapter. Do not use context to invent text.
+- previous_page supplies the preceding page's number, chapter, and automatically
+  generated filename as a naming example only. Do not return a filename: the app
+  pads numeric labels, sanitizes chapter names, and adds a unique capture suffix.
+  Never copy or increment the preceding number; pages may be missing or repeated.
 
 FORMATTING
 - Preserve the structure that Markdown can represent: heading levels, paragraph
