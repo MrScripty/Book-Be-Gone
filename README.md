@@ -18,7 +18,7 @@ python3 -m venv .venv
 .venv/bin/python app.py
 ```
 
-On Windows, use `py -3` for the first command and `.venv\Scripts\python.exe` for the next two.
+These commands use a POSIX shell. Codex OCR currently relies on POSIX process-group cleanup; use a POSIX environment for that provider.
 
 Open [localhost:8765](http://localhost:8765) on the computer with the webcam. Leave the terminal running; Ctrl+C stops the server. The built interface is included, so normal use needs no Node installation.
 
