@@ -1,148 +1,46 @@
 # Book-Be-Gone
 
-A personal utility for turning physical books into Markdown using a webcam and Codex. Small, local, and deliberately plain.
+Turn webcam photos of book pages into editable Markdown. Capture a page or a spread, proofread the transcript beside the scan, then export the book with its figures and page links.
+
+Book-Be-Gone runs on your computer and saves ordinary files locally. Choose Codex, Ollama, llama.cpp or OpenRouter for OCR.
+
+![Book-Be-Gone Read workspace with the scanned spread beside its editable transcript](https://raw.githubusercontent.com/MrScripty/MrScripty/edd3f0d95d6e636e913272d9f2c7e2b4cc157b9b/assets/book-be-gone_ocr.jpg)
+
+*Existing public [portfolio capture](https://github.com/MrScripty/MrScripty/blob/edd3f0d95d6e636e913272d9f2c7e2b4cc157b9b/assets/book-be-gone_ocr.jpg), showing scan/transcript comparison. Provider and model choices shown are historical; this is not a newly tested build.*
 
 ## Run
 
-Requires Python 3.12+, a browser with webcam support, an installed, signed-in Codex CLI, and the dependencies in `requirements.txt`.
+You need Python 3.12+ and a browser with webcam support. From the repository directory:
 
-```bash
+```sh
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m pip install -r requirements.txt
 .venv/bin/python app.py
 ```
 
-Open http://localhost:8765 on the computer with the webcam. Create or select a book, choose **Capture**, start the camera, choose the webcam, and capture one page or a two-page spread per photo. Keep the page flat, well lit, and large in the frame. Capture saves the original photo before any OCR occurs.
+These commands use a POSIX shell. Codex OCR currently relies on POSIX process-group cleanup; use a POSIX environment for that provider.
 
-To test OCR first, choose a page or unread capture in the navigation toolbar and open the arrow beside **OCR remaining** and choose **OCR selected capture**. Only that image is processed; a photographed spread includes both printed pages. Review or edit the resulting Markdown before proceeding. **Redo selected capture** in the same menu lets you retry, with confirmation before replacing existing text.
+Open [localhost:8765](http://localhost:8765) on the computer with the webcam. Leave the terminal running; Ctrl+C stops the server. The built interface is included, so normal use needs no Node installation.
 
-Choose **OCR remaining** to transcribe saved pages sequentially. The default provider is Codex, using `gpt-5.6-luna` with `model_reasoning_effort="low"` through `codex app-server` and your existing Codex login and CLI configuration. Photos are sent to the selected provider when you start OCR. Model access depends on your account. Open the model/thinking control next to **OCR remaining** to choose the OCR provider and model before starting either OCR action. The selection is remembered in this browser and stays fixed throughout a job, including retries. The Codex menu lists image-capable models from your local Codex cache; **Custom model…** accepts another model identifier. Choose **Thinking** in the same settings menu: Low (default), Medium, High, or Extra high, plus Max/Ultra when listed by Codex for that model. The thinking level is remembered in this browser and applied to both Codex OCR actions and retries. Changing models does not reprocess completed captures. Set `BOOK_BE_GONE_MODEL` to change the Codex default.
+For Codex OCR, install and sign in to the Codex CLI first. Other providers need a configured vision model or OpenRouter key. Choose one under **OCR settings**; the [provider guide](docs/guide.md#choose-an-ocr-provider) covers setup.
 
-### Local OCR with Ollama or llama.cpp
+## Make your first book
 
-Open **OCR settings → Provider** and choose **Ollama** or **llama.cpp**. Enter the server URL, click **Load models**, and choose or type the model name. The defaults are `http://127.0.0.1:11434` for Ollama and `http://127.0.0.1:8080` for llama.cpp. URLs ending in `/api` (Ollama) or `/v1` (llama.cpp) also work. The server is contacted by Python, so `localhost` means the computer running Book-Be-Gone; a LAN hostname or IP can be used for a server on another computer. This connection supports HTTP or HTTPS servers without authentication.
+1. Choose **+** beside the book selector, enter a title, then open **Capture**.
+2. Start the camera and frame a page or spread. Put the four live-preview handles on its corners, then choose **Capture page**. The original and cropped, straightened photo are saved.
+3. Return to **Read** and choose **More OCR actions → OCR selected capture**. Try one image before processing the whole book.
+4. Compare the transcript with the scan and correct it in **Edit Markdown**. Highlighted `[illegible]` markers help you find unclear passages.
+5. Choose **OCR remaining** to continue. Completed captures are saved and skipped when you resume.
+6. Use **Book tools → Export book (.zip)** when all captures are complete. Keep the exported Markdown and image assets together.
 
-Use an installed, locally running **vision model** with structured JSON output support. **Load models** checks connectivity and lists models without sending a photograph; the list may also contain text-only models, which cannot transcribe images. For llama.cpp, load the matching multimodal projector if the vision model requires one. The integrations use [Ollama's chat API](https://docs.ollama.com/api/chat) with base64 image input and [llama.cpp's chat completions API](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#post-v1chatcompletions-openai-compatible-chat-completions-api) with image data URLs and schema-constrained output.
+**Redo selected capture** creates a comparison. Saved corrections stay in place until you choose **Save selected changes**; you can also discard the new OCR.
 
-The URL and model are remembered separately for each provider. Codex model and Thinking preferences are retained when switching back; local generation settings come from the local server/model. Local OCR uses the same corrected images, live preview, page/figure metadata validation, and resume behavior. It sends images only to your configured server and never falls back to Codex. Configure your server to run the model locally if you want to avoid cloud processing. Incomplete streams, truncated outputs, and invalid JSON are reported without overwriting saved transcription.
+## Your pages
 
-To retry page 390, select its capture, choose your local provider/model, then use **More OCR actions → Redo selected capture**. This replaces the saved result only after successful OCR. Accuracy depends on the local model and scan quality; review the result. Restart the Python server and reload after updating the app to make the new settings available.
+Capturing does not start OCR. OCR sends images and limited chapter context to your chosen provider; OpenRouter also sends them upstream and bills your account, while local processing depends on your server's configuration. Books stay in `data/<book-id>/` or `BOOK_BE_GONE_DATA`; back up the whole directory, including `.ocr/`.
 
-### OpenRouter OCR
-
-Choose **OCR settings → Provider → OpenRouter**. Enter your OpenRouter API key, click **Load models**, and choose or type a model ID such as `provider/model`. The catalog is filtered to models that advertise image input, text output, and structured outputs. The chosen model is remembered, but the password-field key is held only in this page's memory and is cleared on reload. For a persistent server-side credential, set `OPENROUTER_API_KEY` in the environment before starting Python; an entered key overrides it for that request. Keys are not written into browser storage, book files, or status responses.
-
-OpenRouter is a cloud provider: pages and the OCR prompt are sent to OpenRouter and its selected upstream model provider, and usage is billed to your OpenRouter account. The app uses the fixed `https://openrouter.ai/api/v1` endpoint, [base64 image inputs](https://openrouter.ai/docs/guides/overview/multimodal/image-understanding), and [streamed structured outputs](https://openrouter.ai/docs/guides/features/structured-outputs). It requires schema-capable endpoints through `provider.require_parameters`, and uses the same final validation and checkpoint saving as other OCR providers. Loading models sends no book images and does not run inference.
-
-Invalid keys, insufficient credits, rate limits, truncated responses, and generation failures stop with an error while preserving saved text. The app does not fall back to another OCR provider. OpenRouter and upstream providers may apply their own content restrictions; selecting OpenRouter does not guarantee that a previously filtered passage will be transcribed. Restart Python and reload the browser after updating to enable the new provider.
-
-### Reading and proofreading
-
-The **Read** workspace has one continuous book transcript beside one scanned-image pane. **Capture** opens the camera workspace. Book creation is under **+** beside the book selector; linking and export are in **Book tools (•••)**. Infrequent settings stay in menus, and editing/cropping controls appear only when needed. The shared toolbar provides previous/next page, a selector containing printed pages and unread captures, and a jump field for real printed page numbers. Scrolling the transcript updates the selected page and its image. There is no separate live viewer or grid of capture-status buttons.
-
-Use **+**, **−**, **Fit**, or click the zoom percentage for **100%**; the mouse wheel zooms around the pointer, and dragging pans. Selecting another capture resets the image to fit. Switching between printed pages of the same spread keeps the zoom and pan position.
-
-`[illegible]` markers are highlighted in the rendered book. Click a highlighted marker, or use **Next unclear** / **↑**, to open the relevant page in **Edit Markdown** with the marker selected. Type the replacement and choose **Save**. **Preview** shows unsaved edits; **Cancel** restores the saved text. Ctrl/Cmd+S saves Markdown corrections. Page number and chapter fields are under the editor's metadata disclosure.
-
-Completed pages remain editable while OCR works on another capture. The active capture is protected. Background polling never replaces an unsaved draft, and a version check prevents a stale editor from overwriting newer corrections. Navigation asks before discarding unsaved edits. Saving a printed page preserves the other page of its spread.
-
-Export concatenates completed printed pages in capture order; unfinished captures prevent export so they aren't silently omitted. OCR is fallible: proofread before treating the output as a faithful transcription.
-
-### Live progress and resuming
-
-**OCR remaining** skips every completed capture, including after a failure or server restart. Only an explicit **Redo selected capture** replaces a completed result. Corrected images that have changed remain pending until their text is reviewed or OCR is rerun.
-
-Streamed Markdown appears directly in the continuous transcript. **Follow OCR** tracks the active printed page and its scan; manual navigation or scrolling turns following off so you can read or edit elsewhere. The status line shows the active capture, recognized printed page numbers, elapsed time, and completed/remaining counts. Polling refreshes about every 700 ms. Before Codex emits text, the pending page shows the current activity. Streamed drafts remain provisional until the final structured response is saved.
-
-Restart the Python server after updating the application, then reload the browser. Refresh alone can load a newer interface against an older in-memory backend. The UI now detects that mismatch and explicitly requests a server restart instead of showing an empty stream. Completed OCR is persisted and is skipped when processing resumes.
-
-Each capture now has a **900-second (15-minute) limit**, with one automatic retry after a timeout or transient connection failure. Set `BOOK_BE_GONE_OCR_TIMEOUT` (seconds) before starting the server to change the limit. A repeat failure stops with a concise message; completed captures stay saved, and the remaining button resumes from the unfinished capture. The Codex child process group is terminated on timeout so a retry cannot leave the previous worker running.
-
-Once output starts, OCR also stops after **120 seconds without new transcription progress**, without automatically retrying. Set `BOOK_BE_GONE_OCR_PROGRESS_TIMEOUT` (seconds) to adjust this limit. Progress means a printed page's transcript exceeds its greatest length so far in this attempt; reasoning events and restarted drafts alone do not reset this timer. Replacement drafts keep the previous preview visible until they catch up or finish. A complete message shows “Waiting for OCR to finish” until the turn ends; if it never ends, the progress limit still applies. Saved text is preserved when a stalled redo stops.
-
-If the provider reports `content_filter`, OCR stops immediately and displays that reason, even if Codex labels the error as a retryable stream disconnection. Retrying that filtered response automatically does not complete the transcription. Partial streamed text is never saved as completed OCR, and an existing transcription is preserved.
-
-The integration uses the installed CLI's [app-server streaming protocol](https://learn.chatgpt.com/docs/app-server), with an ephemeral read-only thread per capture, the selected model and thinking level, structured page output, and only the previous chapter as context. It displays assistant transcription deltas, not reasoning text.
-
-### OCR transcription rules
-
-The prompt is editable in [prompts/ocr.md](prompts/ocr.md). It preserves visible printed page numbers, running headers and footers, heading hierarchy, paragraphs, emphasis, lists, tables, captions, and footnotes as Markdown allows. Exact fonts, margins, and positioning are not represented in Markdown.
-
-For a two-page spread, it transcribes the left page first, then the right, into separate Markdown files. The export ZIP contains one Markdown file per printed page, a combined `book.md`, and an `assets/` folder. Spreads in the combined file have a `---` separator. Printed page numbers stay at the top or bottom as shown; capture filenames are not book page numbers. Unreadable printed marks become `[illegible]` instead of a guess. A sentence that continues onto another page is preserved as a readable fragment, without a false illegibility marker or invented ending. Restart the server after editing the prompt. Existing transcriptions are unchanged; retry OCR to replace them using the new prompt.
-
-### Links between printed pages
-
-OCR marks contents/index locators and explicit references such as “see page 44” as page links. The app resolves them to relative links to the actual printed-page Markdown files as those pages become available. Links continue to work when chapter corrections rename the files. Range endpoints preserve their printed labels: “239–40” links to pages 239 and 240. Roman numerals are supported.
-
-For existing OCR, open **Book tools (•••)** in the header and choose **Link page references**. This runs locally without a model call and updates completed pages, preserving their text, figures, and formatting. It recognizes contents/index sections and explicit “page”, “pages”, “p.”, or “pp.” references; it leaves ordinary numbers, code, and authored external links alone. Missing or ambiguous targets stay unlinked. OCR-provided hints to unread pages remain temporary `page:` links until their targets are known; clicking one in the viewer reports that the page is unavailable. The detector is conservative: unusual layouts or implicit references may need a manually edited Markdown link. Earlier text is backed up in `.ocr/history/`.
-
-Click an internal link in the continuous Markdown viewer to select its page and scan. Book/page bookmarks support opening a link in another tab and browser back/forward. Images remain inline in the same viewer. Exported page links are ordinary relative `.md` links; keep all page files and the `assets/` folder together after extracting the ZIP.
-
-### Figures and illustrations
-
-New OCR saves each detected figure as a PNG crop and inserts a relative Markdown image link at its position in the text. Each crop is accompanied by a short generated description and a generated text representation: Mermaid source for suitable simple diagrams, or a fenced plain-text account for plots, photographs, and other figures. Printed captions remain separate. The representations are labeled as generated and supplement the original crop; the prompt forbids inventing data or unreadable details. Mermaid is displayed as editable code in this utility and can be rendered by Markdown tools that support Mermaid.
-
-Choose **Edit crop · N** below the selected scan. Drag the four handles, use arrow keys on a handle, or adjust the percentage fields. The preview updates as you move. **Save crop** writes a new PNG and updates its Markdown link without OCR or changes to your text corrections. Cancel leaves the saved crop unchanged. Crop adjustments use an immutable copy of the image originally sent to OCR, even if you later readjust the page photo. Finish OCR before adjusting figure crops. Use **Edit Markdown** to correct the generated description or representation.
-
-Assets live in `markdown/assets/`; immutable OCR source images live in `.ocr/sources/`. Earlier crop versions are retained for history. **Book tools (•••) → Export book (.zip)** downloads a ZIP containing the page Markdown, combined `book.md`, and referenced assets; keep the assets folder alongside the Markdown when extracting or copying files. Existing completed OCR is unchanged and remains skipped. Redo a selected capture to detect its figures with the new prompt (this replaces that capture's text).
-
-Figure identification, crop boundaries, descriptions, and representations are model estimates and should be reviewed against the original scan. A figure's crop appears after that capture finishes; streamed text may show its temporary `{{figure-1}}` marker until then.
-
-### Crop and camera tilt
-
-In **Capture**, the **live camera preview** shows four numbered handles as soon as the camera starts. Position them on the page corners before capturing. Handles 1–2 share a vertical position, as do 3–4: moving either handle vertically moves its partner, keeping the top and bottom edges level. This also applies to keyboard movement and the saved-photo adjustment editor. **Capture page** saves the full original and a cropped, perspective-corrected version for OCR. The handles stay in place for subsequent captures during the session, so you can turn pages without repeating the setup. Open **Framing** to reset corners or disable **Crop & straighten** when capturing full frames. You can also focus a handle and use arrow keys, with Shift for larger steps. The width / height field in **Framing** controls the corrected page proportions. Camera framing is remembered between sessions. Space captures a page when focus is outside a control.
-
-Select a captured page in **Read**, open **Image actions (•••)** above the scan, and choose **Crop & straighten**. Drag the four numbered handles onto the page corners in clockwise order from the top left (or edit their X/Y coordinates). Choose **Preview**, then **Save crop**. This crops out the surroundings and corrects the perspective of a flat page photographed at an angle, including small rotational tilt.
-
-The page proportions are estimated from its visible edges. For accurate proportions, enter the physical page width divided by its height, in any matching units. Perspective correction cannot flatten a curved page near a book spine.
-
-Adjustments always start from the original photo; **Restore original** removes the correction. Adjusted JPEGs live in the book's `corrected/` directory and become the OCR input. Changing the image marks the page pending again and blocks export until you rerun OCR or review and save its text. Previous Markdown is preserved in the meantime. Finish OCR before adjusting photos. Adjustments apply to individual pages.
-
-## Storage and scope
-
-Each book lives in `data/<book-id>/`:
-
-- Numbered `.jpg` files are the original captures.
-- `corrected/` contains adjusted images used for OCR.
-- `markdown/` contains **one file per printed page**, for example `page-0302__chapter-10__000153-1.md`. The printed number and chapter lead the name; the capture/side suffix prevents collisions. Roman numerals are retained. Missing numbers use `unnumbered`, and unknown chapters use `unknown-chapter`.
-- `.ocr/` stores capture-to-page metadata and chapter evidence so processing can resume. Prior OCR/edit versions are backed up in `.ocr/history/`.
-- `book.json` holds the title.
-
-Batch OCR runs in numeric capture order (printed page numbers are discovered during OCR). Only the preceding capture's known chapter is passed to the next model call; no growing transcript or chat history is sent. Visible chapter evidence updates that context. Missing, unread, or stale preceding captures reset it to unknown rather than guessing. Completing earlier captures later updates inherited chapter labels and filenames without retranscribing later pages. A chapter transition within a spread can give each page a different label.
-
-The model returns structured page metadata plus Markdown through `prompts/ocr.schema.json`; `.md` files contain only the Markdown. UI edits and direct edits to the generated Markdown are preserved when labels are recalculated. Use the UI to change metadata. Earlier capture-level `.md` files remain untouched as backups; startup copies any remaining legacy transcription into `markdown/` with unknown labels until it is rerun or labelled. Legacy captures should be rerun to discover separate physical pages and their metadata; existing text is not silently rewritten.
-
-The former `PAGESCRIBE_DATA`, `PAGESCRIBE_MODEL`, and `PAGESCRIBE_OCR_TIMEOUT` environment variables remain supported; `BOOK_BE_GONE_*` values take precedence. Saved browser preferences migrate automatically.
-
-Data is ignored by Git; back up the entire book directory, including `.ocr/`, separately. Set `BOOK_BE_GONE_DATA` to store it elsewhere.
-
-No accounts, database, cloud storage, or publishing. The server binds to loopback only. Camera capture requires a browser on this computer. The initial version processes photos in capture order; automatic corner detection, curved-page dewarping, image spread splitting, deletion, and reordering are outside this version.
+OCR and generated figure descriptions need proofreading. See the [guide](docs/guide.md) for privacy, crops, links, recovery and current limits.
 
 ## Development
 
-Python standard library server, markdown-it-py for formatted previews, and a Svelte 5 UI built with Vite. [Svelte components](https://svelte.dev/docs/svelte/overview) own the interface and reactive session state; the UI does not load the former DOM-based scripts. Pillow crops saved figures. The renderer disables raw HTML and permits only locally saved figure images, following the [markdown-it-py guidance](https://markdown-it-py.readthedocs.io/en/latest/security.html). The checked-in `frontend/dist/` build is served by Python, so normal use needs no Node server. To edit the UI, use Node 22.12+:
-
-```bash
-cd frontend
-npm ci
-npm run build
-```
-
-Commit updated `frontend/dist/` files with UI changes. For frontend development, run `npm run dev` with `python3 app.py` running separately on port 8765. The Vite development server proxies local API requests. Source components are in `frontend/src/`: `App.svelte` lays out the workspace; `session.svelte.js` owns shared state; `Transcript`, `ImagePane`, `Capture`, `Corners`, and `CropEditor` own their respective interactions. `geometry.js` remains the shared, tested perspective correction implementation.
-
-Run checks from the repository root:
-
-```bash
-python3 -m unittest discover -s tests -v
-node tests/test_geometry.cjs
-```
-
-The real-browser regression test uses a synthetic webcam and a local Codex protocol fixture. It exercises the built Svelte UI through DOM interactions: camera capture and paired handles, live OCR, model/thinking settings, editing during OCR, continuous reading, zoom/pan, figure and page crops, links, bookmarks, ZIP export, and narrow-screen layout:
-
-```bash
-node tests/test_browser.cjs
-```
-
-This test requires Node 22+, Python, and Brave at `/opt/brave.com/brave/brave`, or a Chromium executable supplied through `BROWSER`. It uses temporary data and an isolated browser profile. New captures are selected in the shared viewer unless there are unsaved edits.
-
-The structured prompt was also checked with a real Luna low call on sample capture 000153: it returned printed pages 302 and 303 separately and preserved the trailing sentence fragment without an illegibility marker. Live camera quality still depends on the webcam setup.
+Python serves a Svelte 5/Vite interface. With Node 22.12+, run `npm ci` and `npm run build` in `frontend/`; keep `frontend/dist/` in sync. The guide includes development and test commands. The [OCR prompt](prompts/ocr.md) is editable.
